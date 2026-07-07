@@ -1,211 +1,343 @@
 // wa-telegram-server.js
 // ============================================
+// WA Web Kantor - Telegram Bot Server
+// ============================================
 const express = require('express');
 const TelegramBot = require('node-telegram-bot-api');
-const multer = require('multer');
-const path = require('path');
-const fs = require('fs');
-const fetch = require('node-fetch');
 
 const app = express();
 app.use(express.json());
 
 // ============ KONFIGURASI ============
-// Load dari environment variable, fallback ke placeholder
 const CONFIG = {
-    // PASTE TOKEN TELEGRAM KAMU (atau set TELEGRAM_TOKEN di environment)
     TELEGRAM_TOKEN: process.env.TELEGRAM_TOKEN || '8810076737:AAF3B5gPsriXuDc6l7nS0v7ydwQSfz6KpY8',
-
-    // PASTE CHAT ID KAMU (dari getUpdates)
-    ADMIN_CHAT_ID: process.env.ADMIN_CHAT_ID || 'GANTI_DENGAN_CHAT_ID_KAMU',
-
-    PORT: parseInt(process.env.PORT) || 3000,
-
-    // Folder temporary untuk media
-    MEDIA_DIR: process.env.MEDIA_DIR || './media'
+    ADMIN_CHAT_ID: process.env.ADMIN_CHAT_ID || null,
+    PORT: parseInt(process.env.PORT) || 3000
 };
 
-// Buat folder media jika belum ada
-if (!fs.existsSync(CONFIG.MEDIA_DIR)) {
-    fs.mkdirSync(CONFIG.MEDIA_DIR, { recursive: true });
-}
-
-// ============ FILE UPLOAD ============
-const upload = multer({
-    dest: CONFIG.MEDIA_DIR,
-    limits: { fileSize: 20 * 1024 * 1024 } // 20MB max
-});
+// ============ STATE ============
+let pendingCommands = []; // Command dari Telegram ke WA Web
+let chatHistory = []; // Recent messages untuk history
 
 // ============ TELEGRAM BOT ============
 const bot = new TelegramBot(CONFIG.TELEGRAM_TOKEN, { polling: true });
-
 console.log('🤖 Bot Telegram Connected!');
 
-// Command /start
-bot.onText(/\/start/, (msg) => {
-    bot.sendMessage(msg.chat.id,
-        '🤖 *WA Web Kantor Bot Aktif!*\n\n' +
-        '/sync - Sync manual\n' +
-        '/status - Status\n' +
-        '/stats - Statistik\n\n' +
-        'Pesan dari WA Web akan muncul otomatis.',
-        { parse_mode: 'Markdown' }
+// ============ HELPER ============
+function getChatId(msg) {
+    return msg.chat.id.toString();
+}
+
+function setAdmin(chatId) {
+    if (!CONFIG.ADMIN_CHAT_ID) {
+        CONFIG.ADMIN_CHAT_ID = chatId;
+        console.log(`✅ Admin Chat ID set: ${chatId}`);
+        return true;
+    }
+    return chatId === CONFIG.ADMIN_CHAT_ID;
+}
+
+function isAdmin(chatId) {
+    return !CONFIG.ADMIN_CHAT_ID || chatId === CONFIG.ADMIN_CHAT_ID;
+}
+
+async function sendText(chatId, text, opts = {}) {
+    try {
+        return await bot.sendMessage(chatId, text, { parse_mode: 'HTML', ...opts });
+    } catch (e) {
+        console.error('Send error:', e.message);
+    }
+}
+
+// ============ TELEGRAM COMMANDS ============
+
+bot.onText(/\/start/, async (msg) => {
+    const chatId = getChatId(msg);
+    setAdmin(chatId);
+    await sendText(chatId,
+        '🤖 <b>WA Web Kantor Bot</b>\n\n' +
+        '📋 Commands:\n' +
+        '/inbox - Daftar chat WA\n' +
+        '/status - Status server\n' +
+        '/relink - Scan QR baru\n\n' +
+        '💡 Chat baru dari WA Web akan otomatis masuk ke sini.'
     );
 });
 
-// Command /status
-bot.onText(/\/status/, (msg) => {
-    bot.sendMessage(msg.chat.id, '✅ *Status OK*\n\nWA Web Kantor Online\nMonitoring Aktif', { parse_mode: 'Markdown' });
-});
-
-// Command /stats
-bot.onText(/\/stats/, (msg) => {
-    bot.sendMessage(msg.chat.id,
-        '📊 *Statistik*\n\n' +
-        '🖥️ Server: Online ✅\n' +
-        '🤖 Bot: Aktif ✅\n' +
-        '⏰ ' + new Date().toLocaleString('id-ID'),
-        { parse_mode: 'Markdown' }
+bot.onText(/\/help/, async (msg) => {
+    const chatId = getChatId(msg);
+    await sendText(chatId,
+        '📖 <b>Panduan</b>\n\n' +
+        '<b>/inbox</b> - Tampilkan daftar chat WA\n' +
+        '<b>/last</b> - Pesan terbaru dari setiap chat\n' +
+        '<b>/search [nama]</b> - Cari chat berdasarkan nama\n' +
+        '<b>/relink</b> - Scan QR baru\n\n' +
+        '📌 <b>Cara Kirim Pesan:</b>\n' +
+        'Buka WA Web → klik tombol 💬\n' +
+        'Pilih kontak → ketik pesan\n' +
+        'Pesan akan terkirim via WA Web!'
     );
 });
 
-// Command /sync
-bot.onText(/\/sync/, (msg) => {
-    bot.sendMessage(msg.chat.id, '🔄 Sync request dikirim...');
+bot.onText(/\/status/, async (msg) => {
+    const chatId = getChatId(msg);
+    await sendText(chatId,
+        '📡 <b>Status</b>\n\n' +
+        `Telegram: ✅ Connected\n` +
+        `Admin: ${CONFIG.ADMIN_CHAT_ID || 'Belum ada'}\n` +
+        `Chat monitor: ${chatHistory.length} pesan\n` +
+        `Commands pending: ${pendingCommands.length}\n` +
+        `⏰ ${new Date().toLocaleString('id-ID')}`
+    );
 });
 
-// ============ WEBHOOK ============
+bot.onText(/\/inbox/, async (msg) => {
+    const chatId = getChatId(msg);
+
+    if (!chatHistory.length) {
+        return await sendText(chatId, '📭 Belum ada data chat.\n\nBuka WA Web dulu dan scroll beberapa chat untuk mengisi data.');
+    }
+
+    // Group by sender
+    const grouped = {};
+    chatHistory.forEach(m => {
+        const key = m.chat;
+        if (!grouped[key]) grouped[key] = { count: 0, last: null, lastTime: 0 };
+        grouped[key].count++;
+        if (m.time > grouped[key].lastTime) {
+            grouped[key].last = m.preview;
+            grouped[key].lastTime = m.time;
+        }
+    });
+
+    const sorted = Object.entries(grouped)
+        .sort((a, b) => b[1].lastTime - a[1].lastTime)
+        .slice(0, 20);
+
+    let text = '📋 <b>Inbox WA</b>\n\n';
+    sorted.forEach(([chat, data], i) => {
+        const preview = data.last ? data.last.substring(0, 50) : '(kosong)';
+        const time = new Date(data.lastTime).toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit' });
+        text += `${i + 1}. <b>${chat}</b>\n   💬 ${preview}...\n   ⏰ ${time}\n\n`;
+    });
+
+    text += `\n💡 Buka WA Web untuk kirim/baca pesan lengkap.`;
+    await sendText(chatId, text);
+});
+
+bot.onText(/\/last/, async (msg) => {
+    const chatId = getChatId(msg);
+
+    if (!chatHistory.length) {
+        return await sendText(chatId, '📭 Belum ada chat. Buka WA Web dulu.');
+    }
+
+    const latest = [...chatHistory]
+        .sort((a, b) => b.time - a.time)
+        .slice(0, 10);
+
+    let text = '🕐 <b>Pesan Terbaru</b>\n\n';
+    latest.forEach(m => {
+        const time = new Date(m.time).toLocaleString('id-ID', {
+            day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit'
+        });
+        text += `👤 <b>${m.chat}</b>\n💬 ${m.preview || '(media)'}\n⏰ ${time}\n\n`;
+    });
+
+    await sendText(chatId, text);
+});
+
+bot.onText(/\/search (.+)/, async (msg, match) => {
+    const chatId = getChatId(msg);
+    const query = (match[1] || '').toLowerCase();
+
+    const results = chatHistory.filter(m =>
+        m.chat.toLowerCase().includes(query) ||
+        (m.preview && m.preview.toLowerCase().includes(query))
+    );
+
+    if (!results.length) {
+        return await sendText(chatId, `❌ Tidak ketemu: "${match[1]}"`);
+    }
+
+    let text = `🔍 <b>Hasil pencarian: "${match[1]}"</b>\n\n`;
+    results.slice(0, 10).forEach(m => {
+        const time = new Date(m.time).toLocaleString('id-ID', {
+            day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit'
+        });
+        text += `👤 <b>${m.chat}</b>\n💬 ${m.preview || '(media)'}\n⏰ ${time}\n\n`;
+    });
+
+    await sendText(chatId, text);
+});
+
+bot.onText(/\/relink/, async (msg) => {
+    const chatId = getChatId(msg);
+    await sendText(chatId,
+        '📱 <b>QR Code Scan</b>\n\n' +
+        'Versi ini tidak mendukung QR scan.\n\n' +
+        '✅ Jika ingin kontrol penuh WA via Telegram:\n' +
+        '1. Hapus script ini\n' +
+        '2. Deploy versi Baileys (butuh 1x scan QR)\n\n' +
+        '📌 Versi saat ini sudah:\n' +
+        '• Auto notifikasi chat baru\n' +
+        '• Auto sync foto/video\n' +
+        '• Monitor inbox via /inbox'
+    );
+});
+
+// Handle semua pesan teks dari admin
+bot.on('message', async (msg) => {
+    const chatId = getChatId(msg);
+    if (msg.chat.type !== 'private') return;
+    if (msg.text && msg.text.startsWith('/')) return;
+
+    const isFirst = setAdmin(chatId);
+
+    if (isFirst) {
+        await sendText(chatId,
+            '✅ <b>Admin Terdaftar!</b>\n\n' +
+            'Sekarang kamu bisa:\n' +
+            '• Dapat notifikasi chat baru\n' +
+            '• Kirim /inbox untuk lihat daftar chat\n' +
+            '• Kirim /last untuk pesan terbaru\n\n' +
+            '💡 Buka WA Web untuk mulai monitoring!'
+        );
+    }
+});
+
+// ============ WEBHOOK (dari Tampermonkey) ============
 app.post('/webhook', (req, res) => {
     const data = req.body;
 
-    let message = '';
+    if (data.type === 'ping') {
+        return res.json({ ok: true });
+    }
+
+    if (data.type === 'chat_update') {
+        // Simpan chat baru ke history
+        const chatData = {
+            chat: data.chat || 'Unknown',
+            preview: data.preview || '',
+            time: data.time ? new Date(data.time).getTime() : Date.now(),
+            type: data.messageType || 'text'
+        };
+        chatHistory.push(chatData);
+        if (chatHistory.length > 500) chatHistory = chatHistory.slice(-300);
+
+        // Kirim notifikasi ke Telegram
+        if (CONFIG.ADMIN_CHAT_ID) {
+            const time = new Date(chatData.time).toLocaleTimeString('id-ID', {
+                hour: '2-digit', minute: '2-digit'
+            });
+            const typeIcon = chatData.type === 'image' ? '📷' :
+                            chatData.type === 'video' ? '🎥' :
+                            chatData.type === 'audio' ? '🎵' :
+                            chatData.type === 'document' ? '📄' : '💬';
+
+            let message = `${typeIcon} <b>${chatData.chat}</b>\n`;
+            message += `${typeIcon} ${chatData.preview || '(media)'}\n`;
+            message += `⏰ ${time}`;
+
+            bot.sendMessage(CONFIG.ADMIN_CHAT_ID, message, { parse_mode: 'HTML' })
+                .catch(() => {});
+        }
+        return res.json({ ok: true });
+    }
 
     if (data.type === 'test') {
-        message = '🧪 *Test Connection*\n\n✅ WA Web Kantor terhubung!\n⏰ ' + new Date().toLocaleString('id-ID');
-    }
-    else if (data.type === 'new_messages') {
-        message = '📩 *' + data.messages.length + ' Pesan Baru!*\n\n';
-        data.messages.forEach(msg => {
-            message += '👤 *' + msg.chat + '*\n💬 ' + msg.preview + '\n⏰ ' + (msg.time || new Date().toLocaleString('id-ID')) + '\n\n';
-        });
-    }
-    else if (data.type === 'new_chat') {
-        message = '🆕 *Chat Baru!*\n\n👤 *' + data.chat + '*\n💬 ' + data.preview + '\n⏰ ' + (data.time || new Date().toLocaleString('id-ID'));
-    }
-    else if (data.type === 'sync') {
-        message = '🔄 *Sync Complete*\n\n📊 Total Chat: ' + (data.chats?.length || 0) + '\n⏰ ' + new Date().toLocaleString('id-ID');
-    }
-    else if (data.type === 'custom_message') {
-        message = '💬 *Custom*\n\n' + data.message + '\n⏰ ' + new Date().toLocaleString('id-ID');
-    }
-    else {
-        message = '📱 *Update*\n\n' + JSON.stringify(data, null, 2).substring(0, 500);
+        if (CONFIG.ADMIN_CHAT_ID) {
+            bot.sendMessage(CONFIG.ADMIN_CHAT_ID,
+                '🧪 <b>Test Connection</b>\n\n✅ WA Web Kantor terhubung!\n⏰ ' + new Date().toLocaleString('id-ID'),
+                { parse_mode: 'HTML' }
+            ).catch(() => {});
+        }
+        return res.json({ success: true });
     }
 
-    bot.sendMessage(CONFIG.ADMIN_CHAT_ID, message, { parse_mode: 'Markdown' })
-        .then(() => res.json({ success: true }))
-        .catch(err => res.status(500).json({ error: err.message }));
+    res.json({ ok: true });
 });
 
 // ============ MEDIA WEBHOOK ============
-// Menerima media dari WA Web dan forward ke Telegram
+const multer = require('multer');
+const upload = multer({ dest: '/tmp/media' });
+const fs = require('fs');
+const path = require('path');
+
 app.post('/webhook/media', upload.single('media'), async (req, res) => {
     const { chatName, caption, mediaType } = req.body;
 
+    if (!CONFIG.ADMIN_CHAT_ID) {
+        return res.json({ ok: true, message: 'Admin not set yet' });
+    }
+
     try {
-        let message = '';
-        const chatLabel = chatName ? `👤 *${chatName}*\n` : '';
         const timeLabel = '⏰ ' + new Date().toLocaleString('id-ID');
 
         if (req.file) {
-            // File ada — kirim sebagai media
-            const filePath = req.file.path;
-            const fileSizeMB = (req.file.size / (1024 * 1024)).toFixed(2);
-
-            const sendOptions = {
-                caption: caption ? `${chatLabel}📎 *Media: ${mediaType || 'File'}*\n${caption}\n\n${timeLabel}` : `${chatLabel}📎 *Media: ${mediaType || 'File'}*\n\n${timeLabel}`,
-                parse_mode: 'Markdown'
-            };
-
             const mimeType = req.file.mimetype;
+            const fileSizeMB = (req.file.size / (1024 * 1024)).toFixed(2);
+            const sendOptions = {
+                caption: caption ? `👤 <b>${chatName || 'WA'}</b>\n📎 ${mediaType || 'Media'}\n${caption}\n\n${timeLabel}` : `👤 <b>${chatName || 'WA'}</b>\n📎 ${mediaType || 'Media'}\n\n${timeLabel}`,
+                parse_mode: 'HTML'
+            };
 
             if (mimeType.startsWith('image/')) {
-                await bot.sendPhoto(CONFIG.ADMIN_CHAT_ID, filePath, sendOptions);
-                message = `📷 Foto terkirim (${fileSizeMB} MB)`;
+                await bot.sendPhoto(CONFIG.ADMIN_CHAT_ID, req.file.path, sendOptions);
             } else if (mimeType.startsWith('video/')) {
-                await bot.sendVideo(CONFIG.ADMIN_CHAT_ID, filePath, sendOptions);
-                message = `🎥 Video terkirim (${fileSizeMB} MB)`;
+                await bot.sendVideo(CONFIG.ADMIN_CHAT_ID, req.file.path, sendOptions);
             } else if (mimeType.startsWith('audio/')) {
-                await bot.sendAudio(CONFIG.ADMIN_CHAT_ID, filePath, { caption: sendOptions.caption, parse_mode: 'Markdown' });
-                message = `🎵 Audio terkirim (${fileSizeMB} MB)`;
+                await bot.sendAudio(CONFIG.ADMIN_CHAT_ID, req.file.path, {
+                    caption: sendOptions.caption,
+                    parse_mode: 'HTML'
+                });
             } else {
-                // Dokumen / file lain
-                await bot.sendDocument(CONFIG.ADMIN_CHAT_ID, filePath, { caption: sendOptions.caption, parse_mode: 'Markdown' });
-                message = `📄 Dokumen terkirim: ${req.file.originalname} (${fileSizeMB} MB)`;
+                await bot.sendDocument(CONFIG.ADMIN_CHAT_ID, req.file.path, {
+                    caption: sendOptions.caption,
+                    parse_mode: 'HTML'
+                });
             }
 
-            // Cleanup file temporary
-            fs.unlink(filePath, () => {});
-        } else if (req.body.mediaUrl) {
-            // Tidak ada file upload, coba kirim dari URL
-            const sendOptions = {
-                caption: caption ? `${chatLabel}📎 *Media URL*\n${caption}\n\n${timeLabel}` : `${chatLabel}📎 *Media URL*\n\n${timeLabel}`,
-                parse_mode: 'Markdown'
-            };
-
-            try {
-                if (mediaType === 'image' || mediaType === 'photo') {
-                    await bot.sendPhoto(CONFIG.ADMIN_CHAT_ID, req.body.mediaUrl, sendOptions);
-                } else if (mediaType === 'video') {
-                    await bot.sendVideo(CONFIG.ADMIN_CHAT_ID, req.body.mediaUrl, sendOptions);
-                } else if (mediaType === 'audio') {
-                    await bot.sendAudio(CONFIG.ADMIN_CHAT_ID, req.body.mediaUrl, { caption: sendOptions.caption, parse_mode: 'Markdown' });
-                } else {
-                    await bot.sendDocument(CONFIG.ADMIN_CHAT_ID, req.body.mediaUrl, { caption: sendOptions.caption, parse_mode: 'Markdown' });
-                }
-                message = `📎 Media URL terkirim (via link)`;
-            } catch (urlErr) {
-                message = `⚠️ Gagal kirim media dari URL: ${urlErr.message}`;
-            }
-        } else {
-            return res.status(400).json({ error: 'No media file or mediaUrl provided' });
+            fs.unlink(req.file.path, () => {});
+            return res.json({ success: true });
         }
 
-        console.log(`✅ ${message} — ${chatName || 'Unknown'}`);
-        res.json({ success: true, message });
+        res.json({ ok: true });
     } catch (err) {
-        console.error('❌ Error media webhook:', err.message);
+        console.error('Media webhook error:', err.message);
         res.status(500).json({ error: err.message });
     }
 });
 
-// Endpoint untuk download media dari WA Web (proxy)
-app.get('/proxy/media', async (req, res) => {
-    const { url } = req.query;
-    if (!url) return res.status(400).json({ error: 'url parameter required' });
-
-    try {
-        const response = await fetch(url, {
-            headers: {
-                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
-            }
-        });
-
-        const contentType = response.headers.get('content-type') || 'application/octet-stream';
-        res.setHeader('Content-Type', contentType);
-        res.setHeader('Content-Disposition', 'inline');
-        response.body.pipe(res);
-    } catch (err) {
-        res.status(500).json({ error: err.message });
-    }
+// ============ COMMAND ENDPOINT (WA Browser poll dari sini) ============
+// WA Web script akan poll endpoint ini untuk dapat perintah
+app.get('/commands', (req, res) => {
+    const cmds = pendingCommands.splice(0, pendingCommands.length);
+    res.json({ commands: cmds });
 });
 
+// WA Web script kirim konfirmasi setelah execute command
+app.post('/commands/done', (req, res) => {
+    const { commandId, success, error } = req.body;
+    if (CONFIG.ADMIN_CHAT_ID && success === false) {
+        bot.sendMessage(CONFIG.ADMIN_CHAT_ID, `⚠️ Command gagal: ${error || 'Unknown error'}`)
+            .catch(() => {});
+    }
+    res.json({ ok: true });
+});
+
+// ============ STATUS ============
 app.get('/status', (req, res) => {
-    res.json({ status: 'online', timestamp: new Date().toISOString() });
+    res.json({
+        status: 'online',
+        admin: CONFIG.ADMIN_CHAT_ID ? 'set' : 'pending',
+        chats: chatHistory.length,
+        timestamp: new Date().toISOString()
+    });
 });
 
 app.get('/', (req, res) => {
-    res.send('🤖 WA Web Kantor Bot - Online');
+    res.send('🤖 WA Web Kantor Bot - Online\n\n/admin - ' + (CONFIG.ADMIN_CHAT_ID ? CONFIG.ADMIN_CHAT_ID : 'waiting...'));
 });
 
 // ============ START ============
@@ -215,6 +347,6 @@ app.listen(CONFIG.PORT, '0.0.0.0', () => {
     console.log('========================================');
     console.log('   📡 Port: ' + CONFIG.PORT);
     console.log('   🤖 Bot: Connected ✅');
-    console.log('   👤 Admin: ' + CONFIG.ADMIN_CHAT_ID);
+    console.log('   👤 Admin: ' + (CONFIG.ADMIN_CHAT_ID || 'waiting for first message...'));
     console.log('========================================');
 });
