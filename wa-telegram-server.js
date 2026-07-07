@@ -341,7 +341,7 @@ app.get('/', (req, res) => {
 });
 
 // ============ START ============
-app.listen(CONFIG.PORT, '0.0.0.0', () => {
+app.listen(PORT, '0.0.0.0', () => {
     console.log('========================================');
     console.log('   🚀 WA Web Kantor - Telegram Bot');
     console.log('========================================');
