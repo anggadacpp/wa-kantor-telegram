@@ -27,4 +27,4 @@ HEALTHCHECK --interval=30s --timeout=10s --start-period=15s --retries=3 \
     CMD wget -qO- http://localhost:3000/status || exit 1
 
 # Start
-CMD ["node", "wa-telegram-server.js"]
+CMD ["node", "wa-telegram-bridge.js"]

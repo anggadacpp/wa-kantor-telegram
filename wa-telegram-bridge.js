@@ -12,6 +12,21 @@ const fs = require('fs');
 const path = require('path');
 const pino = require('pino');
 
+// ============ FIX: Hapus file server lama ============
+// Bersihkan file lama untuk hindari conflict
+const oldServerFile = path.join(__dirname, 'wa-telegram-server.js');
+const oldRenderFile = path.join(__dirname, 'render.yaml');
+const oldDockerFile = path.join(__dirname, 'Dockerfile');
+const oldPackage = path.join(__dirname, 'package.json');
+
+try {
+    if (fs.existsSync(oldServerFile)) {
+        fs.unlinkSync(oldServerFile);
+        console.log('🗑️ Dihapus: wa-telegram-server.js (lama)');
+    }
+    // Keep render.yaml & Dockerfile tapi hapus dari start
+} catch (e) {}
+
 // ============ KONFIGURASI ============
 const CONFIG = {
     TELEGRAM_TOKEN: process.env.TELEGRAM_TOKEN || '8810076737:AAF3B5gPsriXuDc6l7nS0v7ydwQSfz6KpY8',
