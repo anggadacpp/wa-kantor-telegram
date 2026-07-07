@@ -1,15 +1,16 @@
 {
   "name": "wa-telegram-bot",
-  "version": "1.0.0",
-  "description": "WA Web Kantor - Telegram Bot Server",
-  "main": "wa-telegram-server.js",
+  "version": "2.0.0",
+  "description": "WA Web Kantor - Telegram Bot Bridge (Full WhatsApp Control)",
+  "main": "wa-telegram-bridge.js",
   "scripts": {
-    "start": "node wa-telegram-server.js"
+    "start": "node wa-telegram-bridge.js"
   },
   "dependencies": {
     "express": "^4.18.0",
     "node-telegram-bot-api": "^0.64.0",
-    "multer": "^1.4.5-lts.1",
-    "node-fetch": "^2.7.0"
+    "baileys": "^6.7.9",
+    "pino": "^8.17.0",
+    "qr-image": "^3.2.0"
   }
 }

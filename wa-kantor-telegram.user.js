@@ -14,8 +14,8 @@
 
     // ============ KONFIGURASI ============
     // GANTI DENGAN URL SERVER KAMU
-    const SERVER_URL = 'https://YOUR_APP_NAME.railway.app/webhook';
-    const MEDIA_URL = 'https://YOUR_APP_NAME.railway.app/webhook/media';
+    const SERVER_URL = 'https://wa-kantor-telegram-production.up.railway.app/webhook';
+    const MEDIA_URL = 'https://wa-kantor-telegram-production.up.railway.app/webhook/media';
 
     const CHECK_INTERVAL = 5000;
     const AUTO_MEDIA_SYNC = true; // Kirim media otomatis ke Telegram
