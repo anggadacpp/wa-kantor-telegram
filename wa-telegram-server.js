@@ -11,9 +11,9 @@ app.use(express.json());
 // ============ KONFIGURASI ============
 const CONFIG = {
     TELEGRAM_TOKEN: process.env.TELEGRAM_TOKEN || '8810076737:AAF3B5gPsriXuDc6l7nS0v7ydwQSfz6KpY8',
-    ADMIN_CHAT_ID: process.env.ADMIN_CHAT_ID || null,
-    PORT: parseInt(process.env.PORT) || 3000
+    ADMIN_CHAT_ID: process.env.ADMIN_CHAT_ID || null
 };
+const PORT = parseInt(process.env.PORT) || 3000;
 
 // ============ STATE ============
 let pendingCommands = []; // Command dari Telegram ke WA Web
@@ -345,7 +345,7 @@ app.listen(CONFIG.PORT, '0.0.0.0', () => {
     console.log('========================================');
     console.log('   🚀 WA Web Kantor - Telegram Bot');
     console.log('========================================');
-    console.log('   📡 Port: ' + CONFIG.PORT);
+    console.log('   📡 Port: ' + PORT);
     console.log('   🤖 Bot: Connected ✅');
     console.log('   👤 Admin: ' + (CONFIG.ADMIN_CHAT_ID || 'waiting for first message...'));
     console.log('========================================');
